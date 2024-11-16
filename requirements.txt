@@ -1,0 +1,13 @@
+pinecone-client
+langchain
+langchain-openai
+langchain-community
+langchain-pinecone
+openai
+python-dotenv
+unstructured
+pdfplumber
+python-docx
+streamlit
+streamlit-chat
+tiktoken
