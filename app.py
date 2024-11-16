@@ -22,6 +22,8 @@ if 'current_chat_id' not in st.session_state:
     st.session_state.current_chat_id = None
 if 'uploaded_files' not in st.session_state:
     st.session_state.uploaded_files = []
+if 'file_summaries' not in st.session_state:
+    st.session_state.file_summaries = {}
 if 'messages' not in st.session_state:
     st.session_state.messages = []
 
@@ -58,24 +60,30 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-def handle_file_upload(files, chat_id: str) -> str:
-    """Process uploaded files and return a summary."""
-    temp_paths = []
-    try:
-        for file in files:
+def handle_file_upload(files, chat_id: str):
+    """Process each uploaded file and return a dictionary of summaries."""
+    summaries = {}
+    for file in files:
+        try:
+            # Save file temporarily
             temp_path = doc_processor.save_temp_file(file)
-            temp_paths.append(temp_path)
+            
+            # Process document and generate summary
+            docs, raw_text = doc_processor.process_documents([temp_path])
+            summary = summarizer.summarize_documents(raw_text)
+            
+            # Store embeddings for each document
+            vector_store.create_index(chat_id)
+            vector_store.add_documents(docs, chat_id)
+            
+            # Store summary with filename as key
+            summaries[file.name] = summary
         
-        docs, raw_text = doc_processor.process_documents(temp_paths)
-        summary = summarizer.summarize_documents(raw_text)
-        vector_store.create_index(chat_id)
-        vector_store.add_documents(docs, chat_id)
-        
-        return summary
-    
-    finally:
-        for temp_path in temp_paths:
+        finally:
+            # Cleanup temporary file
             doc_processor.cleanup_temp_file(temp_path)
+    
+    return summaries
 
 def display_chat_messages():
     """Display chat messages with custom styling."""
@@ -95,6 +103,7 @@ def main():
             st.session_state.chats[chat.id] = chat
             st.session_state.current_chat_id = chat.id
             st.session_state.uploaded_files = []
+            st.session_state.file_summaries = {}
             st.session_state.messages = []
             st.rerun()
         
@@ -106,6 +115,7 @@ def main():
                 if st.button(f"💬 {chat.created_at}", key=f"select_{chat_id}") and not st.session_state.uploaded_files:
                     st.session_state.current_chat_id = chat_id
                     st.session_state.messages = []
+                    st.session_state.file_summaries = {}
                     st.rerun()
             with col2:
                 if st.button("🗑️", key=f"delete_{chat_id}"):
@@ -123,7 +133,7 @@ def main():
     current_chat = st.session_state.chats[st.session_state.current_chat_id]
 
     # Document upload section (only show if no documents processed yet)
-    if not current_chat.summary:
+    if not st.session_state.file_summaries:
         st.header("📄 Document Upload")
         
         uploaded_files = st.file_uploader(
@@ -133,7 +143,7 @@ def main():
             key="file_uploader"
         )
         
-        if uploaded_files is not None:
+        if uploaded_files:
             st.session_state.uploaded_files = list(uploaded_files)
         else:
             st.session_state.uploaded_files = []
@@ -144,23 +154,25 @@ def main():
         if submit_button and st.session_state.uploaded_files:
             with st.spinner('Processing documents...'):
                 try:
-                    summary = handle_file_upload(st.session_state.uploaded_files, current_chat.id)
-                    chat_manager.set_summary(current_chat, summary)
+                    summaries = handle_file_upload(st.session_state.uploaded_files, current_chat.id)
+                    st.session_state.file_summaries = summaries
                     st.session_state.uploaded_files = []
                     st.success("Documents processed successfully!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error processing documents: {str(e)}")
-    
-    # Display the summary if available and keep it expanded by default
-    if current_chat.summary:
-        with st.expander("📑 Document Summary", expanded=True):  # Automatically expanded
-            st.markdown(current_chat.summary)
+
+    # Display summaries with separate expanders for each file
+    if st.session_state.file_summaries:
+        st.header("📑 Document Summaries")
+        for filename, summary in st.session_state.file_summaries.items():
+            with st.expander(f"📄 {filename} Summary", expanded=True):
+                st.markdown(summary)
         
         st.header("💬 Chat")
         display_chat_messages()
         
-        # Show chat input only after the summary is generated
+        # Show chat input only after summaries are generated
         prompt = st.chat_input("Ask a question about your documents...")
         if prompt:
             st.session_state.messages.append({"role": "user", "content": prompt})
