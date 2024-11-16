@@ -1,0 +1,5 @@
+venv/
+/realtime_uploads
+.env
+__pycache__/
+API.txt
