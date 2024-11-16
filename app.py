@@ -1,8 +1,13 @@
+import os
 import streamlit as st
 from utils.document_processor import DocumentProcessor
 from utils.vector_store import VectorStoreManager
 from utils.summarizer import DocumentSummarizer
 from utils.chat_manager import ChatManager
+from dotenv import load_dotenv
+
+# Load the environment variables
+load_dotenv()
 
 # Initialize components
 doc_processor = DocumentProcessor()
