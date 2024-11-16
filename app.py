@@ -20,6 +20,8 @@ if 'chats' not in st.session_state:
     st.session_state.chats = {}
 if 'current_chat_id' not in st.session_state:
     st.session_state.current_chat_id = None
+if 'uploaded_files' not in st.session_state:
+    st.session_state.uploaded_files = []
 
 # Page config
 st.set_page_config(
@@ -28,7 +30,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Custom CSS
+# Custom CSS for styling chat messages
 st.markdown("""
 <style>
     .chat-message {
@@ -46,11 +48,16 @@ st.markdown("""
         background-color: #f0f0f0;
         border-left: 5px solid #4CAF50;
     }
+    .disabled-button {
+        pointer-events: none;
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 def handle_file_upload(files, chat_id: str) -> str:
-    """Process uploaded files and return summary."""
+    """Process uploaded files and return a summary."""
     temp_paths = []
     try:
         # Save files temporarily
@@ -93,6 +100,7 @@ def main():
             chat = chat_manager.create_chat()
             st.session_state.chats[chat.id] = chat
             st.session_state.current_chat_id = chat.id
+            st.session_state.uploaded_files = []
             st.rerun()
         
         st.divider()
@@ -101,7 +109,7 @@ def main():
         for chat_id, chat in st.session_state.chats.items():
             col1, col2 = st.columns([3, 1])
             with col1:
-                if st.button(f"💬 {chat.created_at}", key=f"select_{chat_id}"):
+                if st.button(f"💬 {chat.created_at}", key=f"select_{chat_id}") and not st.session_state.uploaded_files:
                     st.session_state.current_chat_id = chat_id
                     st.rerun()
             with col2:
@@ -122,23 +130,49 @@ def main():
     current_chat = st.session_state.chats[st.session_state.current_chat_id]
     
     # Document upload section (only show if no documents processed yet)
+    # Document upload section (only show if no documents processed yet)
     if not current_chat.summary:
         st.header("📄 Document Upload")
+        
+        # Step 1: Allow users to upload multiple files
         uploaded_files = st.file_uploader(
             "Upload your documents",
             type=['txt', 'pdf', 'docx', 'csv', 'md', 'xlsx', 'xls'],
-            accept_multiple_files=True
+            accept_multiple_files=True,
+            key="file_uploader"
         )
         
-        if uploaded_files:
+        # Step 2: Update session state with the uploaded files
+        if uploaded_files is not None:
+            # If new files are uploaded, update the session state
+            st.session_state.uploaded_files = uploaded_files
+        else:
+            # If no files are uploaded or all files are removed, clear the session state
+            st.session_state.uploaded_files = []
+
+        # Step 3: Disable the "Submit" button if no files are present
+        submit_button_disabled = not st.session_state.uploaded_files
+        submit_button = st.button(
+            "Submit",
+            disabled=submit_button_disabled,
+            key="submit_button"
+        )
+
+        # Step 4: Process files if the "Submit" button is clicked
+        if submit_button and st.session_state.uploaded_files:
             with st.spinner('Processing documents...'):
                 try:
                     summary = handle_file_upload(uploaded_files, current_chat.id)
                     chat_manager.set_summary(current_chat, summary)
+                    
+                    # Clear the session state after processing
+                    st.session_state.uploaded_files = []
+                    
                     st.success("Documents processed successfully!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error processing documents: {str(e)}")
+
     else:
         # Show document summary
         with st.expander("📑 Document Summary", expanded=False):
@@ -148,7 +182,7 @@ def main():
         st.header("💬 Chat")
         display_chat_messages(current_chat)
         
-        # Chat input
+        # Chat input for user questions
         if prompt := st.chat_input("Ask a question about your documents..."):
             # Add user message
             chat_manager.add_message(current_chat, "user", prompt)
