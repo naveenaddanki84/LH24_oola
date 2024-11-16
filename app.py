@@ -152,9 +152,9 @@ def main():
                 except Exception as e:
                     st.error(f"Error processing documents: {str(e)}")
     
-    # Display the summary if available and show the chat input only then
+    # Display the summary if available and keep it expanded by default
     if current_chat.summary:
-        with st.expander("📑 Document Summary", expanded=False):
+        with st.expander("📑 Document Summary", expanded=True):  # Automatically expanded
             st.markdown(current_chat.summary)
         
         st.header("💬 Chat")
