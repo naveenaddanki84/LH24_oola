@@ -61,6 +61,10 @@ Our platform provides detailed, structured summaries at multiple levels:
 - Multiple chat session support
 - Expandable source attribution
 
+## Architecture Diagram
+![image](https://github.com/user-attachments/assets/0a74e06e-ac2c-46f0-8309-a5f02e52a786)
+
+
 ## 🛠️ Technical Requirements
 
 ### Environment Variables
