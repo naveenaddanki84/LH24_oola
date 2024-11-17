@@ -144,7 +144,7 @@ Answer:"""
     def detect_sensitive_question(self, question: str) -> bool:
         """Detect if the question contains sensitive information."""
         sensitive_keywords = [
-            "password", "phone number", "email address", "api key", "credit card", "ssn", "secret"
+            "password", "phone number", "email address", "api key", "credit card", "ssn", "secret", "contact", "contact information"
         ]
         question_lower = question.lower()
         return any(keyword in question_lower for keyword in sensitive_keywords)

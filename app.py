@@ -23,6 +23,12 @@ if 'chats' not in st.session_state:
     st.session_state.chats = {}
 if 'current_chat_id' not in st.session_state:
     st.session_state.current_chat_id = None
+if 'uploaded_files' not in st.session_state:
+    st.session_state.uploaded_files = []
+if 'file_summaries' not in st.session_state:
+    st.session_state.file_summaries = {}
+if 'messages' not in st.session_state:
+    st.session_state.messages = []
 
 # Page config
 st.set_page_config(
@@ -52,40 +58,53 @@ st.markdown("""
         background-color: #f0f0f0;
         border-left: 5px solid #4CAF50;
     }
+    .disabled-button {
+        pointer-events: none;
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-def handle_file_upload(files, chat_id: str) -> str:
-    """Process uploaded files and return summary."""
-    temp_paths = []
-    try:
-        # Save files temporarily
-        for file in files:
+def handle_file_upload(files, chat_id: str) -> dict:
+    """Process each uploaded file and return a dictionary of summaries."""
+    summaries = {}
+    for file in files:
+        temp_paths = []
+        try:
+            # Save file temporarily
             temp_path = doc_processor.save_temp_file(file)
             temp_paths.append(temp_path)
+            
+            # Process document and generate summary
+            docs, raw_text = doc_processor.process_documents([temp_path])
+            summary = summarizer.summarize_documents(raw_text)
+            
+            # Store embeddings for each document
+            vector_store.create_index(chat_id)
+            vector_store.add_documents(docs, chat_id)
+            
+            # Store summary with filename as key
+            summaries[file.name] = summary
         
-        # Process documents
-        docs, raw_text = doc_processor.process_documents(temp_paths)
-        
-        # Generate summary
-        summary = summarizer.summarize_documents(raw_text)
-        
-        # Store embeddings
-        vector_store.create_index(chat_id)
-        vector_store.add_documents(docs, chat_id)
-        
-        return summary
+        finally:
+            # Cleanup temporary files
+            for temp_path in temp_paths:
+                doc_processor.cleanup_temp_file(temp_path)
     
-    finally:
-        # Cleanup temporary files
-        for temp_path in temp_paths:
-            doc_processor.cleanup_temp_file(temp_path)
+    return summaries
 
-def display_chat_messages(chat):
+def display_chat_messages():
     """Display chat messages with custom styling."""
-    for message in chat.messages:
+    for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
+            if message["role"] == "assistant" and "sources" in message:
+                # Display each source in its own expander
+                for source in message["sources"]:
+                    idx = source['source_number']
+                    with st.expander(f"📄 Source {idx} (File: {source['file_path']}, Page: {source['page_number']})", expanded=False):
+                        st.markdown(f"{source['text']}\n")
 
 def is_thank_you_message(message: str) -> bool:
     """Check if the message is a thank-you message."""
@@ -139,6 +158,9 @@ def main():
             chat = chat_manager.create_chat()
             st.session_state.chats[chat.id] = chat
             st.session_state.current_chat_id = chat.id
+            st.session_state.uploaded_files = []
+            st.session_state.file_summaries = {}
+            st.session_state.messages = []
             st.rerun()
         
         st.divider()
@@ -147,8 +169,10 @@ def main():
         for chat_id, chat in st.session_state.chats.items():
             col1, col2 = st.columns([3, 1])
             with col1:
-                if st.button(f"💬 {chat.created_at}", key=f"select_{chat_id}"):
+                if st.button(f"💬 {chat.created_at}", key=f"select_{chat_id}") and not st.session_state.uploaded_files:
                     st.session_state.current_chat_id = chat_id
+                    st.session_state.messages = []
+                    st.session_state.file_summaries = {}
                     st.rerun()
             with col2:
                 if st.button("🗑️", key=f"delete_{chat_id}"):
@@ -168,31 +192,44 @@ def main():
     current_chat = st.session_state.chats[st.session_state.current_chat_id]
     
     # Document upload section (only show if no documents processed yet)
-    if not current_chat.summary:
+    if not st.session_state.file_summaries:
         st.header("📄 Document Upload")
+        
         uploaded_files = st.file_uploader(
             "Upload your documents",
             type=['txt', 'pdf', 'docx', 'csv', 'md', 'xlsx', 'xls'],
-            accept_multiple_files=True
+            accept_multiple_files=True,
+            key="file_uploader"
         )
         
         if uploaded_files:
+            st.session_state.uploaded_files = list(uploaded_files)
+        else:
+            st.session_state.uploaded_files = []
+        
+        submit_button_disabled = not st.session_state.uploaded_files
+        submit_button = st.button("Submit", disabled=submit_button_disabled)
+        
+        if submit_button and st.session_state.uploaded_files:
             with st.spinner('Processing documents...'):
                 try:
-                    summary = handle_file_upload(uploaded_files, current_chat.id)
-                    chat_manager.set_summary(current_chat, summary)
+                    summaries = handle_file_upload(st.session_state.uploaded_files, current_chat.id)
+                    st.session_state.file_summaries = summaries
+                    st.session_state.uploaded_files = []
                     st.success("Documents processed successfully!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error processing documents: {str(e)}")
     else:
-        # Show document summary
-        with st.expander("📑 Document Summary", expanded=False):
-            st.markdown(current_chat.summary)
+        # Display summaries with separate expanders for each file
+        st.header("📑 Document Summaries")
+        for filename, summary in st.session_state.file_summaries.items():
+            with st.expander(f"📄 {filename} Summary", expanded=True):
+                st.markdown(summary)
         
         # Chat interface
-        st.header("💬 Chat")
-        display_chat_messages(current_chat)
+        st.header("💬 Q&A")
+        display_chat_messages()
         
         # Chat input
         prompt = st.chat_input("Ask a question about your documents...")
@@ -210,17 +247,17 @@ def main():
                         "You're very welcome! I'm glad I could assist you. "
                         "If you have any more questions or need further assistance, feel free to ask!"
                     )
-                    chat_manager.add_message(current_chat, "assistant", response_text)
+                    st.session_state.messages.append({"role": "assistant", "content": response_text})
                     with st.chat_message("assistant"):
                         st.markdown(response_text)
-                # Check for aggressive messages after sensitive responses
+                # Check for aggressive messages
                 elif is_aggressive_message(prompt):
                     response_text = (
                         "I understand your frustration, and I’m sorry I couldn’t provide the information you were seeking. "
                         "However, due to the instructions I follow, I cannot share sensitive information.\n\n"
                         "Is there anything else I can help you with?"
                     )
-                    chat_manager.add_message(current_chat, "assistant", response_text)
+                    st.session_state.messages.append({"role": "assistant", "content": response_text})
                     with st.chat_message("assistant"):
                         st.markdown(response_text)
                 # Check for sensitive questions
@@ -228,12 +265,14 @@ def main():
                     response_text = (
                         "Sorry, I cannot provide you the details you asked as it contains sensitive information."
                     )
-                    chat_manager.add_message(current_chat, "assistant", response_text)
+                    st.session_state.messages.append({"role": "assistant", "content": response_text})
                     with st.chat_message("assistant"):
                         st.markdown(response_text)
                 else:
                     # Add user message
-                    chat_manager.add_message(current_chat, "user", prompt)
+                    st.session_state.messages.append({"role": "user", "content": prompt})
+                    with st.chat_message("user"):
+                        st.markdown(prompt)
                     
                     # Get response from RAG
                     retriever = vector_store.get_retriever(current_chat.id)
@@ -243,19 +282,52 @@ def main():
                         with st.spinner("Thinking..."):
                             try:
                                 response = chain({"question": prompt})
-                                answer = response.get('answer', '').strip()
-                                if not answer:
+                                assistant_reply = response.get('answer', '').strip()
+                                source_documents = response.get('source_documents', [])
+                                
+                                # Check if assistant reply is empty
+                                if not assistant_reply:
                                     st.warning("No relevant documents found for your query.")
-                                    answer = (
+                                    assistant_reply = (
                                         "I'm sorry, I could not find an answer to your question in the documents."
                                     )
+                                
                                 # Append follow-up question
-                                answer += "\n\nIs there anything else I can help you with?"
-                                chat_manager.add_message(current_chat, "assistant", answer)
-                                st.markdown(answer)
+                                assistant_reply += "\n\nIs there anything else I can help you with?"
+                                
+                                # Process source documents to get texts and metadata
+                                source_texts = []
+                                for idx, doc in enumerate(source_documents, 1):
+                                    text = doc.page_content
+                                    metadata = doc.metadata
+                                    file_path = metadata.get('file_path', 'Unknown file')
+                                    page_number = metadata.get('page', 'Unknown page')
+                                    source_texts.append({
+                                        'text': text,
+                                        'file_path': file_path,
+                                        'page_number': page_number,
+                                        'source_number': idx  # Add source number
+                                    })
+                                
+                                # Store the assistant's reply and sources
+                                st.session_state.messages.append({
+                                    "role": "assistant",
+                                    "content": assistant_reply,
+                                    "sources": source_texts
+                                })
+                                
+                                # Display the assistant's reply
+                                st.markdown(assistant_reply)
+                                
+                                # Display each source in its own expander
+                                for source in source_texts:
+                                    idx = source['source_number']
+                                    with st.expander(f"📄 Source {idx} (File: {source['file_path']}, Page: {source['page_number']})", expanded=False):
+                                        st.markdown(f"{source['text']}\n")
+                                
                             except Exception as e:
                                 st.error(f"An error occurred: {str(e)}")
                                 logging.error(f"Chain invocation error: {e}")
-
+                    
 if __name__ == "__main__":
     main()
