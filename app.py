@@ -90,6 +90,12 @@ def display_chat_messages():
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
+            if message["role"] == "assistant" and "sources" in message:
+                # Display each source in its own expander
+                for source in message["sources"]:
+                    idx = source['source_number']
+                    with st.expander(f"📄 Source {idx} (File: {source['file_path']}, Page: {source['page_number']})", expanded=False):
+                        st.markdown(f"{source['text']}\n")
 
 def main():
     st.title("📚 Document Chat Assistant")
@@ -185,10 +191,40 @@ def main():
 
             with st.chat_message("assistant"):
                 with st.spinner("Thinking..."):
-                    response = chain.invoke({"question": prompt})
+                    # Get the assistant's reply
+                    response = chain({"question": prompt})
                     assistant_reply = response['answer']
-                    st.session_state.messages.append({"role": "assistant", "content": assistant_reply})
+                    source_documents = response['source_documents']  # Extract source documents
+
+                    # Process source documents to get texts and metadata
+                    source_texts = []
+                    for idx, doc in enumerate(source_documents, 1):
+                        text = doc.page_content
+                        metadata = doc.metadata
+                        file_path = metadata.get('file_path', 'Unknown file')
+                        page_number = metadata.get('page', 'Unknown page')
+                        source_texts.append({
+                            'text': text,
+                            'file_path': file_path,
+                            'page_number': page_number,
+                            'source_number': idx  # Add source number
+                        })
+
+                    # Store the assistant's reply and sources
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": assistant_reply,
+                        "sources": source_texts
+                    })
+
+                    # Display the assistant's reply
                     st.markdown(assistant_reply)
+
+                    # Display each source in its own expander
+                    for source in source_texts:
+                        idx = source['source_number']
+                        with st.expander(f"📄 Source {idx} (File: {source['file_path']}, Page: {source['page_number']})", expanded=False):
+                            st.markdown(f"{source['text']}\n")
     else:
         st.info("📄 Please upload and process your documents to start asking questions.")
 
