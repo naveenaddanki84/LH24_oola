@@ -89,7 +89,7 @@ def display_chat_messages():
                 st.markdown("📚 Top 3 Most Relevant Sources:")
                 # Display each source in an expandable section
                 for idx, source in enumerate(message["sources"], 1):
-                    with st.expander(f"📄 Source {idx} - {source['file_name']} (Page: {source['page']})"):
+                    with st.expander(f"📄 Source {idx} - {source['file_name']}"):
                         st.markdown(source['text'])
 
 def main():
@@ -246,7 +246,6 @@ def main():
                         sources.append({
                             'text': doc.page_content,
                             'file_name': os.path.basename(doc.metadata.get('source', 'Unknown')),
-                            'page': doc.metadata.get('page', 'N/A'),
                             'score': doc.metadata.get('score', 0)  # Add score if available
                         })
                     
