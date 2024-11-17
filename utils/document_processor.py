@@ -165,3 +165,4 @@ class DocumentProcessor:
                     os.rmdir(temp_dir)
             except Exception as e:
                 print(f"Error cleaning up temp file {temp_path}: {str(e)}")
+

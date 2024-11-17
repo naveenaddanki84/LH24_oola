@@ -6,6 +6,7 @@ from utils.summarizer import DocumentSummarizer
 from utils.chat_manager import ChatManager
 from dotenv import load_dotenv
 import time
+import re
 
 # Load the environment variables
 load_dotenv()
@@ -84,13 +85,54 @@ def display_chat_messages():
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
-            if message["role"] == "assistant" and "sources" in message:
+            # Only display sources if they exist and are not set to None
+            if message["role"] == "assistant" and message.get("sources"):
                 st.markdown("---")
                 st.markdown("📚 Top 3 Most Relevant Sources:")
                 # Display each source in an expandable section
                 for idx, source in enumerate(message["sources"], 1):
                     with st.expander(f"📄 Source {idx} - {source['file_name']}"):
                         st.markdown(source['text'])
+
+def is_thank_you_message(message: str) -> bool:
+    """Check if the message is a thank-you message."""
+    thank_you_phrases = [
+        "thank you", "thanks", "thank you very much", "thanks a lot", "thank you so much",
+        "thank u", "thx", "ty", "cheers", "much appreciated", "i appreciate it",
+        "gracias", "danke", "merci", "thanks for your help"
+    ]
+    return any(phrase in message.lower() for phrase in thank_you_phrases)
+
+def is_aggressive_message(message: str) -> bool:
+    """Check if the message contains aggressive or negative language."""
+    aggressive_phrases = [
+        "you're useless", "this is stupid", "can't you do anything", "you are dumb", "idiot",
+        "not helpful", "waste of time", "why can't you answer", "you are terrible", "you're awful", "pathetic"
+    ]
+    return any(phrase in message.lower() for phrase in aggressive_phrases)
+
+def detect_sensitive_question(question: str) -> bool:
+    """Detect if the question contains sensitive information."""
+    sensitive_keywords = [
+        "password", "phone number", "email address", "api key", 
+        "credit card", "ssn", "secret", "contact", "social security number"
+    ]
+    question_lower = question.lower()
+    return any(keyword in question_lower for keyword in sensitive_keywords)
+
+def check_sensitive_information(text: str) -> bool:
+    """Check if the text contains sensitive information."""
+    sensitive_patterns = [
+        r'\b\d{3}-\d{2}-\d{4}\b',  # SSN (e.g., 123-45-6789)
+        r'\b\d{10}\b',  # Phone numbers (e.g., 1234567890)
+        r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b',  # Email addresses
+        r'\b(?:\d[ -]*?){13,16}\b',  # Credit card numbers
+        r'\b[A-Za-z0-9]{32,}\b'  # API keys
+    ]
+    for pattern in sensitive_patterns:
+        if re.search(pattern, text):
+            return True
+    return False
 
 def main():
     st.title("📚 Document Chat Assistant")
@@ -104,6 +146,7 @@ def main():
             chat = chat_manager.create_chat()
             st.session_state.chats[chat.id] = chat
             st.session_state.current_chat_id = chat.id
+            st.session_state.messages = []
             st.rerun()
         
         st.divider()
@@ -114,6 +157,7 @@ def main():
             with col1:
                 if st.button(f"💬 {chat.created_at}", key=f"select_{chat_id}"):
                     st.session_state.current_chat_id = chat_id
+                    st.session_state.messages = []
                     st.rerun()
             with col2:
                 if st.button("🗑️", key=f"delete_{chat_id}"):
@@ -227,39 +271,76 @@ def main():
         
         # Chat input
         if prompt := st.chat_input("Ask a question about your documents..."):
+            # Add user message
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
             with st.spinner('Thinking...'):
                 try:
+                    # Check for thank-you or aggressive messages
+                    if is_thank_you_message(prompt):
+                        response_text = (
+                            "You're very welcome! I'm glad I could assist you. "
+                            "If you have any more questions or need further assistance, feel free to ask!"
+                        )
+                        st.session_state.messages.append({"role": "assistant", "content": response_text})
+                        st.rerun()
+                        return
+                    elif is_aggressive_message(prompt):
+                        response_text = (
+                            "I understand your frustration, and I’m sorry I couldn’t provide the information you were seeking. "
+                            "However, due to the instructions I follow, I cannot share sensitive information.\n\n"
+                            "Is there anything else I can help you with?"
+                        )
+                        st.session_state.messages.append({"role": "assistant", "content": response_text})
+                        st.rerun()
+                        return
+                    # Detect if the question contains sensitive information
+                    if detect_sensitive_question(prompt):
+                        answer = "Sorry, I cannot provide the details you asked for as it contains sensitive information."
+                        # Append the phrase to keep the conversation flowing
+                        answer += "\n\nIs there anything else I can help you with?"
+                        # Add assistant message without sources
+                        message = {
+                            "role": "assistant",
+                            "content": answer,
+                            "sources": None  # Do not include sources
+                        }
+                        st.session_state.messages.append(message)
+                        st.rerun()
+                        return
                     # Get conversation chain
                     chain = chat_manager.get_conversation_chain(current_chat)
-                    
-                    # Add user message
-                    st.session_state.messages.append({"role": "user", "content": prompt})
-                    
                     # Get response
                     response = chain({"question": prompt})
                     answer = response["answer"]
                     source_documents = response.get("source_documents", [])
-                    
-                    # Process source documents (limit to top 3)
-                    sources = []
-                    for idx, doc in enumerate(source_documents[:3], 1):  # Only process top 3 sources
-                        sources.append({
-                            'text': doc.page_content,
-                            'file_name': os.path.basename(doc.metadata.get('source', 'Unknown')),
-                            'score': doc.metadata.get('score', 0)  # Add score if available
-                        })
-                    
-                    # Sort sources by score if available
-                    sources.sort(key=lambda x: x.get('score', 0), reverse=True)
-                    
-                    # Add assistant message with sources
+                    # Check for sensitive information in assistant's reply
+                    if check_sensitive_information(answer):
+                        st.error("The response contains sensitive information and cannot be displayed.")
+                        answer = "Sorry, I cannot provide the details you asked for as it contains sensitive information."
+                        # Do not display sources
+                        sources = None
+                    else:
+                        # Process source documents (limit to top 3)
+                        sources = []
+                        for idx, doc in enumerate(source_documents[:3], 1):  # Only process top 3 sources
+                            sources.append({
+                                'text': doc.page_content,
+                                'file_name': os.path.basename(doc.metadata.get('source', 'Unknown')),
+                                'score': doc.metadata.get('score', 0)  # Add score if available
+                            })
+                        # Sort sources by score if available
+                        sources.sort(key=lambda x: x.get('score', 0), reverse=True)
+                        # Append the phrase to keep the conversation flowing
+                        answer += "\n\nIs there anything else I can help you with?"
+                    # Add assistant message with or without sources
                     message = {
                         "role": "assistant",
                         "content": answer,
                         "sources": sources
                     }
                     st.session_state.messages.append(message)
-                    
                     # Rerun to update UI
                     st.rerun()
                 except Exception as e:
