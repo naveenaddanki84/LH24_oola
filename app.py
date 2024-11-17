@@ -5,9 +5,12 @@ from utils.vector_store import VectorStoreManager
 from utils.summarizer import DocumentSummarizer
 from utils.chat_manager import ChatManager
 from dotenv import load_dotenv
+import openai
+import logging
 
 # Load the environment variables
 load_dotenv()
+openai.api_key = os.environ.get("OPENAI_API_KEY")
 
 # Initialize components
 doc_processor = DocumentProcessor()
@@ -27,6 +30,9 @@ st.set_page_config(
     page_icon="📚",
     layout="wide"
 )
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
 
 # Custom CSS
 st.markdown("""
@@ -80,6 +86,46 @@ def display_chat_messages(chat):
     for message in chat.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
+
+def is_thank_you_message(message: str) -> bool:
+    """Check if the message is a thank-you message."""
+    thank_you_phrases = [
+        "thank you",
+        "thanks",
+        "thank you very much",
+        "thanks a lot",
+        "thank you so much",
+        "thank u",
+        "thx",
+        "ty",
+        "cheers",
+        "much appreciated",
+        "i appreciate it",
+        "gracias",
+        "danke",
+        "merci",
+        "thanks for your help"
+    ]
+    message_lower = message.lower()
+    return any(phrase in message_lower for phrase in thank_you_phrases)
+
+def is_aggressive_message(message: str) -> bool:
+    """Check if the message contains aggressive or negative language."""
+    aggressive_phrases = [
+        "you're useless",
+        "this is stupid",
+        "can't you do anything",
+        "you are dumb",
+        "idiot",
+        "not helpful",
+        "waste of time",
+        "why can't you answer",
+        "you are terrible",
+        "you're awful",
+        "pathetic"
+    ]
+    message_lower = message.lower()
+    return any(phrase in message_lower for phrase in aggressive_phrases)
 
 def main():
     st.title("📚 Document Chat Assistant")
@@ -149,21 +195,67 @@ def main():
         display_chat_messages(current_chat)
         
         # Chat input
-        if prompt := st.chat_input("Ask a question about your documents..."):
-            # Add user message
-            chat_manager.add_message(current_chat, "user", prompt)
-            
-            # Get response from RAG
-            retriever = vector_store.get_retriever(current_chat.id)
-            chain = chat_manager.get_conversation_chain(retriever, current_chat)
-            
-            with st.chat_message("assistant"):
-                with st.spinner("Thinking..."):
-                    response = chain.invoke({"question": prompt})
-                    chat_manager.add_message(
-                        current_chat, "assistant", response['answer']
+        prompt = st.chat_input("Ask a question about your documents...")
+        if prompt is not None:
+            # Validate input
+            if not prompt.strip():
+                st.error("Input cannot be empty. Please provide a valid question.")
+            else:
+                # Log user input
+                logging.info(f"User Input: {prompt}")
+                
+                # Check if the message is a thank-you message
+                if is_thank_you_message(prompt):
+                    response_text = (
+                        "You're very welcome! I'm glad I could assist you. "
+                        "If you have any more questions or need further assistance, feel free to ask!"
                     )
-                    st.markdown(response['answer'])
+                    chat_manager.add_message(current_chat, "assistant", response_text)
+                    with st.chat_message("assistant"):
+                        st.markdown(response_text)
+                # Check for aggressive messages after sensitive responses
+                elif is_aggressive_message(prompt):
+                    response_text = (
+                        "I understand your frustration, and I’m sorry I couldn’t provide the information you were seeking. "
+                        "However, due to the instructions I follow, I cannot share sensitive information.\n\n"
+                        "Is there anything else I can help you with?"
+                    )
+                    chat_manager.add_message(current_chat, "assistant", response_text)
+                    with st.chat_message("assistant"):
+                        st.markdown(response_text)
+                # Check for sensitive questions
+                elif chat_manager.detect_sensitive_question(prompt):
+                    response_text = (
+                        "Sorry, I cannot provide you the details you asked as it contains sensitive information."
+                    )
+                    chat_manager.add_message(current_chat, "assistant", response_text)
+                    with st.chat_message("assistant"):
+                        st.markdown(response_text)
+                else:
+                    # Add user message
+                    chat_manager.add_message(current_chat, "user", prompt)
+                    
+                    # Get response from RAG
+                    retriever = vector_store.get_retriever(current_chat.id)
+                    chain = chat_manager.get_conversation_chain(retriever, current_chat)
+                    
+                    with st.chat_message("assistant"):
+                        with st.spinner("Thinking..."):
+                            try:
+                                response = chain({"question": prompt})
+                                answer = response.get('answer', '').strip()
+                                if not answer:
+                                    st.warning("No relevant documents found for your query.")
+                                    answer = (
+                                        "I'm sorry, I could not find an answer to your question in the documents."
+                                    )
+                                # Append follow-up question
+                                answer += "\n\nIs there anything else I can help you with?"
+                                chat_manager.add_message(current_chat, "assistant", answer)
+                                st.markdown(answer)
+                            except Exception as e:
+                                st.error(f"An error occurred: {str(e)}")
+                                logging.error(f"Chain invocation error: {e}")
 
 if __name__ == "__main__":
     main()
