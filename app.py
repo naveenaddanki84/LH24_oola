@@ -86,9 +86,11 @@ def display_chat_messages():
             st.markdown(message["content"])
             if message["role"] == "assistant" and "sources" in message:
                 st.markdown("---")
-                st.markdown("📚 Sources:")
+                st.markdown("📚 Top 3 Most Relevant Sources:")
+                # Display each source in an expandable section
                 for idx, source in enumerate(message["sources"], 1):
-                    st.markdown(f"Source {idx} - {source['file_name']}")
+                    with st.expander(f"📄 Source {idx} - {source['file_name']} (Page: {source['page']})"):
+                        st.markdown(source['text'])
 
 def main():
     st.title("📚 Document Chat Assistant")
@@ -238,14 +240,18 @@ def main():
                     answer = response["answer"]
                     source_documents = response.get("source_documents", [])
                     
-                    # Process source documents
+                    # Process source documents (limit to top 3)
                     sources = []
-                    for idx, doc in enumerate(source_documents, 1):
+                    for idx, doc in enumerate(source_documents[:3], 1):  # Only process top 3 sources
                         sources.append({
                             'text': doc.page_content,
                             'file_name': os.path.basename(doc.metadata.get('source', 'Unknown')),
-                            'page': doc.metadata.get('page', 'N/A')
+                            'page': doc.metadata.get('page', 'N/A'),
+                            'score': doc.metadata.get('score', 0)  # Add score if available
                         })
+                    
+                    # Sort sources by score if available
+                    sources.sort(key=lambda x: x.get('score', 0), reverse=True)
                     
                     # Add assistant message with sources
                     message = {
