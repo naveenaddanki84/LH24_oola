@@ -143,7 +143,13 @@ class DocumentProcessor:
     
     def save_temp_file(self, uploaded_file) -> str:
         """Save uploaded file temporarily and return path."""
-        temp_path = f"temp_{uploaded_file.name}"
+        # Create temp directory if it doesn't exist
+        temp_dir = "temp_files"
+        if not os.path.exists(temp_dir):
+            os.makedirs(temp_dir)
+            
+        # Create unique filename to avoid conflicts
+        temp_path = os.path.join(temp_dir, f"temp_{uploaded_file.name}")
         with open(temp_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
         return temp_path
@@ -151,4 +157,11 @@ class DocumentProcessor:
     def cleanup_temp_file(self, temp_path: str):
         """Remove temporary file."""
         if os.path.exists(temp_path):
-            os.remove(temp_path)
+            try:
+                os.remove(temp_path)
+                # Remove temp directory if empty
+                temp_dir = os.path.dirname(temp_path)
+                if os.path.exists(temp_dir) and not os.listdir(temp_dir):
+                    os.rmdir(temp_dir)
+            except Exception as e:
+                print(f"Error cleaning up temp file {temp_path}: {str(e)}")

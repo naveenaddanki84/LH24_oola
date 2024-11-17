@@ -4,9 +4,10 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from langchain.chains import ConversationalRetrievalChain
 from langchain_openai import ChatOpenAI
-from langchain.memory import ConversationBufferWindowMemory, ConversationSummaryMemory
+from langchain.memory import ConversationBufferMemory
 from langchain.schema import BaseChatMessageHistory
 from langchain.schema.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
+from langchain.prompts import PromptTemplate
 from functools import lru_cache
 
 @dataclass
@@ -36,6 +37,7 @@ class ChatManager:
     def __init__(self):
         self.llm = ChatOpenAI(temperature=0)
         self._chain_cache = {}  # Cache for conversation chains
+        self.vector_store = None  # Will be set after initialization
     
     @lru_cache(maxsize=10)
     def _get_cached_chain(self, chat_id: str):
@@ -53,86 +55,89 @@ class ChatManager:
             personal_context={}
         )
     
-    def get_conversation_chain(self, retriever, chat_session: ChatSession):
-        """Create a conversation chain for RAG with persistent memory."""
-        # Check cache first
-        cached_chain = self._get_cached_chain(chat_session.id)
-        if cached_chain:
-            return cached_chain
+    def get_conversation_chain(self, chat_session: ChatSession):
+        """Get or create a conversation chain for a chat session."""
+        try:
+            if chat_session.id in self._chain_cache:
+                return self._chain_cache[chat_session.id]
             
-        message_history = CustomChatMessageHistory(chat_session)
-        
-        # Window memory for recent conversations
-        memory = ConversationBufferWindowMemory(
-            memory_key="chat_history",
-            chat_memory=message_history,
-            return_messages=True,
-            output_key="answer",
-            k=20  # Increased for better context retention
-        )
-        
-        # Create a comprehensive system message
-        system_message = """You are a helpful assistant deals with QA from the documents uploaded.
+            # Get vector store for this chat
+            if not self.vector_store:
+                raise ValueError("Vector store not initialized")
+                
+            vectorstore = self.vector_store.get_retriever(chat_session.id)
+            if not vectorstore:
+                raise ValueError("Could not create retriever for chat session")
+            
+            # Create memory with updated configuration
+            memory = ConversationBufferMemory(
+                memory_key="chat_history",
+                return_messages=True,
+                output_key="answer"
+            )
+            
+            # Custom prompt template for better source attribution
+            prompt = PromptTemplate(
+                template="""You are a helpful assistant for analyzing documents. Use the following pieces of context to answer the question. If you don't know the answer, just say that you don't know, don't try to make up an answer.
 
-Key points to remember:
-1. Stay focused on the context
-2. Maintain conversation context and refer back to previous discussions
-3. If the user goes off-topic, gently guide them back to the project focus
-4. Be consistent with your responses and maintain knowledge of previous interactions"""
+Context from documents:
+{context}
 
-        if chat_session.personal_context:
-            system_message += "\n\nUser Context:"
-            for key, value in chat_session.personal_context.items():
-                system_message += f"\n- {key}: {value}"
+Chat History:
+{chat_history}
 
-        if chat_session.summary:
-            system_message += "\n\nDocument Context:\n" + chat_session.summary
-        
-        chain = ConversationalRetrievalChain.from_llm(
-            llm=self.llm,
-            retriever=retriever,
-            memory=memory,
-            verbose=True,
-            return_source_documents=True,
-            rephrase_question=False,
-            combine_docs_chain_kwargs={
-                "prompt": None,
-                "document_variable_name": "context"
-            }
-        )
+Question: {question}
 
-        # Add system message to memory
-        memory.chat_memory.add_message(SystemMessage(content=system_message))
-        
-        # Cache the chain
-        self._chain_cache[chat_session.id] = chain
-        return chain
+Please provide a detailed answer based on the context provided. Do not include any text about sources in your answer. The sources will be displayed separately below your answer.
+
+Answer: """,
+                input_variables=["context", "question", "chat_history"]
+            )
+            
+            # Create QA chain with source documents
+            qa_chain = ConversationalRetrievalChain.from_llm(
+                llm=self.llm,
+                retriever=vectorstore,
+                memory=memory,
+                combine_docs_chain_kwargs={"prompt": prompt},
+                return_source_documents=True,  # Important: Return source documents
+                verbose=True
+            )
+            
+            self._chain_cache[chat_session.id] = qa_chain
+            return qa_chain
+            
+        except Exception as e:
+            print(f"Error creating conversation chain: {str(e)}")
+            raise ValueError(f"Failed to create conversation chain: {str(e)}")
     
     def add_message(self, chat: ChatSession, role: str, content: str):
         """Add a message to both display history and chat memory."""
-        # Add to display messages with timestamp for better context tracking
+        # Add to display messages with timestamp
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        chat.messages.append({
-            "role": role,
-            "content": content,
-            "timestamp": timestamp
-        })
         
+        # If it's an assistant response, split into answer and sources
+        if role == "assistant" and "Sources:" in content:
+            parts = content.split("Sources:", 1)
+            answer = parts[0].replace("Answer:", "").strip()
+            sources = "Sources:\n" + parts[1].strip() if len(parts) > 1 else ""
+            
+            chat.messages.append({
+                "role": role,
+                "content": answer,
+                "sources": sources,
+                "timestamp": timestamp
+            })
+        else:
+            chat.messages.append({
+                "role": role,
+                "content": content,
+                "timestamp": timestamp
+            })
+        
+        # Add to chat history
         if role == "user":
-            # Update personal context
-            if "my name is" in content.lower():
-                name = content.lower().split("my name is")[-1].strip()
-                chat.personal_context["name"] = name
-            elif "i am" in content.lower():
-                activity = content.lower().split("i am")[-1].strip()
-                chat.personal_context["current_activity"] = activity
-            
-            # Create message with context if needed
-            message = content
-            if chat.summary and not any(kw in content.lower() for kw in chat.summary.lower().split()):
-                message += "\n\nNote: Let me help you with questions about the uploaded documents."
-            
-            chat.chat_history.append(HumanMessage(content=message))
+            chat.chat_history.append(HumanMessage(content=content))
         else:
             chat.chat_history.append(AIMessage(content=content))
         

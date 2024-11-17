@@ -5,6 +5,7 @@ from utils.vector_store import VectorStoreManager
 from utils.summarizer import DocumentSummarizer
 from utils.chat_manager import ChatManager
 from dotenv import load_dotenv
+import time
 
 # Load the environment variables
 load_dotenv()
@@ -14,12 +15,15 @@ doc_processor = DocumentProcessor()
 vector_store = VectorStoreManager()
 summarizer = DocumentSummarizer()
 chat_manager = ChatManager()
+chat_manager.vector_store = vector_store  # Set the vector store
 
 # Initialize session state
 if 'chats' not in st.session_state:
     st.session_state.chats = {}
 if 'current_chat_id' not in st.session_state:
     st.session_state.current_chat_id = None
+if 'messages' not in st.session_state:
+    st.session_state.messages = []
 
 # Page config
 st.set_page_config(
@@ -75,11 +79,16 @@ def handle_file_upload(files, chat_id: str) -> str:
         for temp_path in temp_paths:
             doc_processor.cleanup_temp_file(temp_path)
 
-def display_chat_messages(chat):
+def display_chat_messages():
     """Display chat messages with custom styling."""
-    for message in chat.messages:
+    for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
+            if message["role"] == "assistant" and "sources" in message:
+                st.markdown("---")
+                st.markdown("📚 Sources:")
+                for idx, source in enumerate(message["sources"], 1):
+                    st.markdown(f"Source {idx} - {source['file_name']}")
 
 def main():
     st.title("📚 Document Chat Assistant")
@@ -122,65 +131,135 @@ def main():
     current_chat = st.session_state.chats[st.session_state.current_chat_id]
     
     # Document upload section (only show if no documents processed yet)
-    if not current_chat.summary:
+    if not hasattr(current_chat, 'individual_summaries') or not current_chat.individual_summaries:
         st.header("📄 Document Upload")
+        
+        # File uploader
         uploaded_files = st.file_uploader(
             "Upload your documents",
             type=['txt', 'pdf', 'docx', 'csv', 'md', 'xlsx', 'xls', 'jpg', 'jpeg', 'png', 'gif'],
-            accept_multiple_files=True
+            accept_multiple_files=True,
+            help="Supported formats: Text files, PDFs, Word docs, Excel files, and images"
         )
         
+        # Submit button for processing
         if uploaded_files:
-            with st.spinner('Processing documents...'):
-                try:
-                    summary = handle_file_upload(uploaded_files, current_chat.id)
-                    chat_manager.set_summary(current_chat, summary)
-                    st.success("Documents processed successfully!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error processing documents: {str(e)}")
-    else:
-        # Show document summary
-        with st.expander("📑 Document Summary", expanded=False):
-            st.markdown(current_chat.summary)
-        
-        # Chat interface
+            total_size = sum(file.size for file in uploaded_files)
+            if total_size > 100 * 1024 * 1024:  # 100MB limit
+                st.error("Total file size exceeds 100MB limit. Please reduce the size or number of files.")
+                return
+                
+            st.write(f"Selected {len(uploaded_files)} files")
+            if st.button("Process Documents"):
+                with st.spinner('Processing documents...'):
+                    try:
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+                        
+                        # Process files and get summaries
+                        temp_paths = []
+                        filenames = []
+                        
+                        # Step 1: Save files
+                        status_text.text("Saving uploaded files...")
+                        for i, uploaded_file in enumerate(uploaded_files):
+                            temp_path = doc_processor.save_temp_file(uploaded_file)
+                            temp_paths.append(temp_path)
+                            filenames.append(uploaded_file.name)
+                            progress_bar.progress((i + 1) / (len(uploaded_files) * 4))
+                        
+                        # Step 2: Process documents
+                        status_text.text("Processing documents...")
+                        docs, raw_text = doc_processor.process_documents(temp_paths)
+                        progress_bar.progress(0.5)
+                        
+                        # Step 3: Generate summaries
+                        status_text.text("Generating summaries...")
+                        summaries = summarizer.summarize_documents(raw_text, filenames)
+                        progress_bar.progress(0.75)
+                        
+                        # Step 4: Store in vector store
+                        status_text.text("Creating vector store...")
+                        vector_store.create_index(current_chat.id)
+                        vector_store.add_documents(docs, current_chat.id)
+                        
+                        # Update chat session
+                        current_chat.individual_summaries = summaries['individual_summaries']
+                        
+                        # Cleanup temp files
+                        status_text.text("Cleaning up...")
+                        for temp_path in temp_paths:
+                            doc_processor.cleanup_temp_file(temp_path)
+                        
+                        progress_bar.progress(1.0)
+                        status_text.text("✅ Processing complete!")
+                        st.success("Documents processed successfully!")
+                        time.sleep(1)  # Give user time to see success message
+                        st.rerun()
+                        
+                    except Exception as e:
+                        # Cleanup on error
+                        for temp_path in temp_paths:
+                            doc_processor.cleanup_temp_file(temp_path)
+                        st.error(f"Error processing documents: {str(e)}")
+                        
+                        # Log error for debugging
+                        print(f"Document processing error: {str(e)}")
+                        
+    # Display summaries section
+    if hasattr(current_chat, 'individual_summaries') and current_chat.individual_summaries:
+        st.header("📑 Document Summaries")
+        # Create tabs for each file
+        tabs = st.tabs([f"📄 {summary['filename']}" for summary in current_chat.individual_summaries])
+        for tab, summary in zip(tabs, current_chat.individual_summaries):
+            with tab:
+                st.write(summary['summary'])
+    
+    # Chat interface
+    if hasattr(current_chat, 'individual_summaries') and current_chat.individual_summaries:
         st.header("💬 Chat")
-        display_chat_messages(current_chat)
+        
+        # Display messages
+        if st.session_state.messages:
+            display_chat_messages()
         
         # Chat input
         if prompt := st.chat_input("Ask a question about your documents..."):
-            # Add user message
-            chat_manager.add_message(current_chat, "user", prompt)
-            
-            # Display user message
-            with st.chat_message("user"):
-                st.markdown(prompt)
-            
-            # Get response from RAG
-            retriever = vector_store.get_retriever(current_chat.id)
-            chain = chat_manager.get_conversation_chain(retriever, current_chat)
-            
-            # Display assistant response
-            with st.chat_message("assistant"):
-                with st.spinner("Thinking..."):
-                    try:
-                        response = chain.invoke({
-                            "question": prompt,
-                            "chat_history": current_chat.chat_history  # Pass full chat history
+            with st.spinner('Thinking...'):
+                try:
+                    # Get conversation chain
+                    chain = chat_manager.get_conversation_chain(current_chat)
+                    
+                    # Add user message
+                    st.session_state.messages.append({"role": "user", "content": prompt})
+                    
+                    # Get response
+                    response = chain({"question": prompt})
+                    answer = response["answer"]
+                    source_documents = response.get("source_documents", [])
+                    
+                    # Process source documents
+                    sources = []
+                    for idx, doc in enumerate(source_documents, 1):
+                        sources.append({
+                            'text': doc.page_content,
+                            'file_name': os.path.basename(doc.metadata.get('source', 'Unknown')),
+                            'page': doc.metadata.get('page', 'N/A')
                         })
-                        
-                        if 'answer' in response:
-                            st.markdown(response['answer'])
-                            chat_manager.add_message(current_chat, "assistant", response['answer'])
-                        else:
-                            error_msg = "Sorry, I couldn't generate a response. Please try again."
-                            st.error(error_msg)
-                            chat_manager.add_message(current_chat, "assistant", error_msg)
-                    except Exception as e:
-                        error_msg = f"Error generating response: {str(e)}"
-                        st.error(error_msg)
-                        chat_manager.add_message(current_chat, "assistant", error_msg)
+                    
+                    # Add assistant message with sources
+                    message = {
+                        "role": "assistant",
+                        "content": answer,
+                        "sources": sources
+                    }
+                    st.session_state.messages.append(message)
+                    
+                    # Rerun to update UI
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error processing your question: {str(e)}")
+                    print(f"Chat error: {str(e)}")  # Log error for debugging
 
 if __name__ == "__main__":
     main()
