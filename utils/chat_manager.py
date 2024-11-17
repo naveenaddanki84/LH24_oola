@@ -4,9 +4,10 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from langchain.chains import ConversationalRetrievalChain
 from langchain_openai import ChatOpenAI
-from langchain.memory import ConversationBufferMemory
+from langchain.memory import ConversationBufferWindowMemory, ConversationSummaryMemory
 from langchain.schema import BaseChatMessageHistory
 from langchain.schema.messages import BaseMessage, HumanMessage, AIMessage
+from functools import lru_cache
 
 @dataclass
 class ChatSession:
@@ -33,6 +34,12 @@ class CustomChatMessageHistory(BaseChatMessageHistory):
 class ChatManager:
     def __init__(self):
         self.llm = ChatOpenAI(temperature=0)
+        self._chain_cache = {}  # Cache for conversation chains
+    
+    @lru_cache(maxsize=10)
+    def _get_cached_chain(self, chat_id: str):
+        """Get cached conversation chain."""
+        return self._chain_cache.get(chat_id)
     
     def create_chat(self) -> ChatSession:
         """Create a new chat session."""
@@ -46,24 +53,37 @@ class ChatManager:
     
     def get_conversation_chain(self, retriever, chat_session: ChatSession):
         """Create a conversation chain for RAG with persistent memory."""
+        # Check cache first
+        cached_chain = self._get_cached_chain(chat_session.id)
+        if cached_chain:
+            return cached_chain
+            
         message_history = CustomChatMessageHistory(chat_session)
         
-        memory = ConversationBufferMemory(
+        # Window memory for recent conversations
+        memory = ConversationBufferWindowMemory(
             memory_key="chat_history",
             chat_memory=message_history,
             return_messages=True,
-            output_key="answer"
+            output_key="answer",  # Explicitly set output key
+            k=10  # Increased window size to maintain more context
         )
         
         chain = ConversationalRetrievalChain.from_llm(
             llm=self.llm,
             retriever=retriever,
             memory=memory,
-            verbose=False,
+            verbose=True,  # Enable verbose mode for debugging
             return_source_documents=True,
-            combine_docs_chain_kwargs={"prompt": None}
+            rephrase_question=False,  # Disable automatic question rephrasing
+            combine_docs_chain_kwargs={
+                "prompt": None,
+                "document_variable_name": "context"
+            }
         )
         
+        # Cache the chain
+        self._chain_cache[chat_session.id] = chain
         return chain
     
     def add_message(self, chat: ChatSession, role: str, content: str):

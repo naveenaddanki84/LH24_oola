@@ -153,17 +153,34 @@ def main():
             # Add user message
             chat_manager.add_message(current_chat, "user", prompt)
             
+            # Display user message
+            with st.chat_message("user"):
+                st.markdown(prompt)
+            
             # Get response from RAG
             retriever = vector_store.get_retriever(current_chat.id)
             chain = chat_manager.get_conversation_chain(retriever, current_chat)
             
+            # Display assistant response
             with st.chat_message("assistant"):
                 with st.spinner("Thinking..."):
-                    response = chain.invoke({"question": prompt})
-                    chat_manager.add_message(
-                        current_chat, "assistant", response['answer']
-                    )
-                    st.markdown(response['answer'])
+                    try:
+                        response = chain.invoke({
+                            "question": prompt,
+                            "chat_history": current_chat.chat_history[-6:]
+                        })
+                        
+                        if 'answer' in response:
+                            st.markdown(response['answer'])
+                            chat_manager.add_message(current_chat, "assistant", response['answer'])
+                        else:
+                            error_msg = "Sorry, I couldn't generate a response. Please try again."
+                            st.error(error_msg)
+                            chat_manager.add_message(current_chat, "assistant", error_msg)
+                    except Exception as e:
+                        error_msg = f"Error generating response: {str(e)}"
+                        st.error(error_msg)
+                        chat_manager.add_message(current_chat, "assistant", error_msg)
 
 if __name__ == "__main__":
     main()
