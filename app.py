@@ -103,7 +103,7 @@ def display_chat_messages():
                 # Display each source in its own expander
                 for source in message["sources"]:
                     idx = source['source_number']
-                    with st.expander(f"📄 Source {idx} (File: {source['file_path']}, Page: {source['page_number']})", expanded=False):
+                    with st.expander(f"📄 Source {idx} (File: {source['file_path']}", expanded=False):
                         st.markdown(f"{source['text']}\n")
 
 def is_thank_you_message(message: str) -> bool:
@@ -301,11 +301,9 @@ def main():
                                     text = doc.page_content
                                     metadata = doc.metadata
                                     file_path = metadata.get('file_path', 'Unknown file')
-                                    page_number = metadata.get('page', 'Unknown page')
                                     source_texts.append({
                                         'text': text,
                                         'file_path': file_path,
-                                        'page_number': page_number,
                                         'source_number': idx  # Add source number
                                     })
                                 
@@ -322,7 +320,7 @@ def main():
                                 # Display each source in its own expander
                                 for source in source_texts:
                                     idx = source['source_number']
-                                    with st.expander(f"📄 Source {idx} (File: {source['file_path']}, Page: {source['page_number']})", expanded=False):
+                                    with st.expander(f"📄 Source {idx} (File: {source['file_path']}", expanded=False):
                                         st.markdown(f"{source['text']}\n")
                                 
                             except Exception as e:
