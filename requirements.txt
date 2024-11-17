@@ -14,6 +14,7 @@ tiktoken
 openpyxl>=3.1.2
 pandas>=2.0.0
 xlrd
+networkx
 Pillow>=10.0.0
 python-magic-bin>=0.4.14
 PyPDF2>=3.0.0
