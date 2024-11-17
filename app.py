@@ -126,7 +126,7 @@ def main():
         st.header("📄 Document Upload")
         uploaded_files = st.file_uploader(
             "Upload your documents",
-            type=['txt', 'pdf', 'docx', 'csv', 'md', 'xlsx', 'xls'],
+            type=['txt', 'pdf', 'docx', 'csv', 'md', 'xlsx', 'xls', 'jpg', 'jpeg', 'png', 'gif'],
             accept_multiple_files=True
         )
         
@@ -167,7 +167,7 @@ def main():
                     try:
                         response = chain.invoke({
                             "question": prompt,
-                            "chat_history": current_chat.chat_history[-6:]
+                            "chat_history": current_chat.chat_history  # Pass full chat history
                         })
                         
                         if 'answer' in response:

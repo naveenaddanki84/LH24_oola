@@ -3,7 +3,7 @@ langchain
 langchain-openai
 langchain-community
 langchain-pinecone
-openai
+openai>=1.0.0
 python-dotenv
 unstructured
 pdfplumber
@@ -11,3 +11,7 @@ python-docx
 streamlit
 streamlit-chat
 tiktoken
+openpyxl
+pandas
+xlrd
+Pillow
