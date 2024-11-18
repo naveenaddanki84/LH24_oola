@@ -1,4 +1,4 @@
-# Indiana Toxicity Watch - Document Analysis Platform
+#  Multimodal Document Analysis and Q&A System
 
 ## 🎯 Project Overview
 An advanced document processing and analysis platform designed for comprehensive document interaction and intelligent Q&A capabilities.
